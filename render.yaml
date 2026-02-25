@@ -4,13 +4,12 @@ services:
     runtime: docker
     repo: https://github.com/infinawaz/Multilingual-Video-Text-Annotation-and-Translation-Pipeline.git
     branch: main
-    plan: free
+    rootDir: ./
     dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /api/health
     envVars:
       - key: LIBRETRANSLATE_URL
         value: https://libretranslate.com
-      - key: LIBRETRANSLATE_API_KEY
-        value: ""
       - key: PORT
         value: "10000"

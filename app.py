@@ -3,7 +3,7 @@ Multilingual Video Text Annotation and Translation Pipeline
 ============================================================
 FastAPI web application for extracting, annotating, and translating
 text from video frames using Tesseract OCR and LibreTranslate.
-Optimized for lightweight deployment on Render free tier.
+Optimized to minimize translation API calls via deduplication.
 """
 
 import os
@@ -21,9 +21,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from pipeline.ocr import extract_text_from_frame
-from pipeline.translate import translate_detections
+from pipeline.translate import translate_detections, clear_cache
 from pipeline.overlay import create_annotated_frame
-from pipeline.preprocess import preprocess_frame
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -67,32 +66,23 @@ def image_to_base64(image: Image.Image) -> str:
 
 def extract_frames_from_video(video_path: str, max_frames: int = 8) -> list:
     """
-    Extract frames from a video file using imageio (lightweight alternative to OpenCV).
-    
-    Args:
-        video_path: Path to the video file.
-        max_frames: Maximum number of frames to extract.
-    
-    Returns:
-        List of (frame_number, PIL Image) tuples.
+    Extract frames from a video file using imageio.
     """
     import imageio.v3 as iio
-    
+
     try:
-        # Read all frames metadata to get count
         frames_data = iio.imread(video_path, plugin="pyav")
         total_frames = len(frames_data)
     except Exception:
-        # Fallback: read frame by frame
         frames_data = list(iio.imiter(video_path, plugin="pyav"))
         total_frames = len(frames_data)
-    
+
     if total_frames == 0:
         return []
-    
+
     interval = max(1, total_frames // max_frames)
     frames = []
-    
+
     for i in range(0, total_frames, interval):
         if len(frames) >= max_frames:
             break
@@ -102,8 +92,26 @@ def extract_frames_from_video(video_path: str, max_frames: int = 8) -> list:
             if pil_image.mode != "RGB":
                 pil_image = pil_image.convert("RGB")
             frames.append((i, pil_image))
-    
+
     return frames
+
+
+def deduplicate_text(all_frame_detections: list) -> dict:
+    """
+    Collect all unique texts across all frames, so we only
+    translate each unique string once.
+
+    Returns:
+        Dict mapping unique text -> list of (frame_idx, det_idx) positions.
+    """
+    text_map = {}
+    for frame_idx, detections in enumerate(all_frame_detections):
+        for det_idx, det in enumerate(detections):
+            key = (det["text"].strip(), det.get("language", "eng"))
+            if key not in text_map:
+                text_map[key] = []
+            text_map[key].append((frame_idx, det_idx))
+    return text_map
 
 
 # ---------------------------------------------------------------------------
@@ -134,13 +142,10 @@ async def process_video(
     max_frames: int = Query(8, description="Maximum frames to process", ge=1, le=30),
 ):
     """
-    Process a video or image file:
-    1. Extract frames
-    2. Run OCR on each frame
-    3. Translate detected text
-    4. Generate annotated frames
+    Process a video or image file.
+    Deduplicates translation calls: identical text across frames
+    is only sent to the translation API once.
     """
-    # Validate file type
     allowed_video = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
     allowed_image = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
     ext = os.path.splitext(file.filename or "")[1].lower()
@@ -151,7 +156,6 @@ async def process_video(
             detail=f"Unsupported file type '{ext}'. Allowed: {allowed_video | allowed_image}",
         )
 
-    # Save uploaded file
     file_id = str(uuid.uuid4())
     file_path = os.path.join(UPLOAD_DIR, f"{file_id}{ext}")
 
@@ -159,43 +163,51 @@ async def process_video(
         with open(file_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
+        # Clear translation cache for this new job
+        clear_cache()
+
         is_image = ext in allowed_image
-        results = []
 
+        # Step 1: Extract all frames
         if is_image:
-            # Process single image
             image = Image.open(file_path).convert("RGB")
-
-            detections = extract_text_from_frame(image)
-            detections = translate_detections(detections, target_lang=target_lang)
-            annotated = create_annotated_frame(image, detections)
-
-            results.append({
-                "frame_number": 0,
-                "detections": detections,
-                "annotated_frame": image_to_base64(annotated),
-                "original_frame": image_to_base64(image),
-            })
+            frames = [(0, image)]
         else:
-            # Process video frames
             frames = extract_frames_from_video(file_path, max_frames=max_frames)
-
             if not frames:
                 raise HTTPException(status_code=400, detail="No frames extracted from video")
 
-            for frame_num, frame in frames:
-                detections = extract_text_from_frame(frame)
-                detections = translate_detections(detections, target_lang=target_lang)
-                annotated = create_annotated_frame(frame, detections)
+        # Step 2: Run OCR on all frames
+        all_detections = []
+        for frame_num, frame in frames:
+            detections = extract_text_from_frame(frame)
+            all_detections.append(detections)
 
-                results.append({
-                    "frame_number": frame_num,
-                    "detections": detections,
-                    "annotated_frame": image_to_base64(annotated),
-                    "original_frame": image_to_base64(frame),
-                })
+        # Step 3: Translate — cache ensures duplicates are NOT re-translated
+        # The translate module's cache handles deduplication automatically.
+        # If frame 1 has "Hello" and frame 5 also has "Hello",
+        # the API is called only once.
+        for detections in all_detections:
+            translate_detections(detections, target_lang=target_lang)
 
-        # Summary statistics
+        # Step 4: Generate annotated frames + build response
+        results = []
+        total_api_calls = len(set(
+            d["text"].strip()
+            for dets in all_detections
+            for d in dets
+            if d.get("translation_status") == "success"
+        ))
+
+        for (frame_num, frame), detections in zip(frames, all_detections):
+            annotated = create_annotated_frame(frame, detections)
+            results.append({
+                "frame_number": frame_num,
+                "detections": detections,
+                "annotated_frame": image_to_base64(annotated),
+                "original_frame": image_to_base64(frame),
+            })
+
         total_detections = sum(len(r["detections"]) for r in results)
         languages_found = list(
             set(d["language"] for r in results for d in r["detections"])
@@ -206,6 +218,7 @@ async def process_video(
             "filename": file.filename,
             "frames_processed": len(results),
             "total_text_regions": total_detections,
+            "unique_translations": total_api_calls,
             "languages_detected": languages_found,
             "target_language": target_lang,
             "frames": results,
@@ -217,7 +230,6 @@ async def process_video(
         logger.error(f"Processing error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
     finally:
-        # Cleanup uploaded file
         if os.path.exists(file_path):
             os.remove(file_path)
 
@@ -241,9 +253,6 @@ async def get_languages():
     }
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))

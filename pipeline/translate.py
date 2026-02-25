@@ -1,12 +1,12 @@
 """
 Translation module using LibreTranslate API.
-Translates detected text between languages with graceful fallback.
+Includes caching to avoid duplicate API calls for the same text.
 """
 
 import os
 import logging
 import requests
-from typing import Optional
+from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,13 @@ LANG_CODE_MAP = {
     "tam": "ta",
 }
 
-REVERSE_LANG_MAP = {v: k for k, v in LANG_CODE_MAP.items()}
+# In-memory translation cache: (text, source, target) -> translated_text
+_translation_cache: Dict[tuple, str] = {}
+
+
+def clear_cache():
+    """Clear the translation cache (call between different processing jobs)."""
+    _translation_cache.clear()
 
 
 def translate_text(
@@ -32,25 +38,21 @@ def translate_text(
     timeout: int = 10,
 ) -> Optional[str]:
     """
-    Translate text using LibreTranslate API.
-    
-    Args:
-        text: Text to translate.
-        source_lang: Source language code (LibreTranslate format, e.g., 'hi').
-                     Use 'auto' for auto-detection.
-        target_lang: Target language code (e.g., 'en').
-        timeout: Request timeout in seconds.
-    
-    Returns:
-        Translated text string, or None if translation fails.
+    Translate text using LibreTranslate API with caching.
     """
     if not text or not text.strip():
         return text
-    
+
     # If source == target, no translation needed
     if source_lang == target_lang:
         return text
-    
+
+    # Check cache first
+    cache_key = (text.strip(), source_lang, target_lang)
+    if cache_key in _translation_cache:
+        logger.info(f"Cache hit for: '{text[:30]}...'")
+        return _translation_cache[cache_key]
+
     try:
         payload = {
             "q": text,
@@ -58,26 +60,29 @@ def translate_text(
             "target": target_lang,
             "format": "text",
         }
-        
+
         if LIBRETRANSLATE_API_KEY:
             payload["api_key"] = LIBRETRANSLATE_API_KEY
-        
+
         response = requests.post(
             f"{LIBRETRANSLATE_URL}/translate",
             json=payload,
             timeout=timeout,
             headers={"Content-Type": "application/json"},
         )
-        
+
         if response.status_code == 200:
             result = response.json()
-            return result.get("translatedText", text)
+            translated = result.get("translatedText", text)
+            # Store in cache
+            _translation_cache[cache_key] = translated
+            return translated
         else:
             logger.warning(
                 f"Translation API returned {response.status_code}: {response.text}"
             )
             return None
-    
+
     except requests.exceptions.Timeout:
         logger.warning("Translation API request timed out")
         return None
@@ -95,17 +100,11 @@ def translate_detections(
 ) -> list:
     """
     Translate all text detections to the target language.
-    
-    Args:
-        detections: List of detection dicts with 'text' and 'language' keys.
-        target_lang: Target language code (e.g., 'en').
-    
-    Returns:
-        Updated detections list with 'translated_text' field added.
+    Uses cache so identical text across frames is only translated once.
     """
     for det in detections:
         source_code = LANG_CODE_MAP.get(det.get("language", "eng"), "en")
-        
+
         if source_code == target_lang:
             det["translated_text"] = det["text"]
             det["translation_status"] = "same_language"
@@ -121,5 +120,5 @@ def translate_detections(
             else:
                 det["translated_text"] = det["text"]
                 det["translation_status"] = "failed"
-    
+
     return detections

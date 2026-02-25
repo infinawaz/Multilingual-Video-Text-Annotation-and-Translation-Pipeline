@@ -14,7 +14,7 @@ An automated pipeline to **extract**, **annotate**, and **translate** textual re
 - 🎨 **Visual Annotations** — Bounding boxes with color-coded language labels
 - 📊 **Confidence Scoring** — Filter results by OCR confidence levels
 - 🖼️ **Image & Video Support** — Process both individual images and video files
-- 📤 **JSON Export** — Download structured annotation results
+- 🔄 **Smart Translation Caching** — Identical text across frames is translated only once
 - 🚀 **One-click Deploy** — Ready for Render deployment with Docker
 
 ---
@@ -33,7 +33,7 @@ An automated pipeline to **extract**, **annotate**, and **translate** textual re
 ├──────────────────────────────────────────────┤
 │  ┌────────────┐ ┌──────────┐ ┌────────────┐ │
 │  │ Preprocess │→│   OCR    │→│ Translate   │ │
-│  │ (OpenCV)   │ │(Tesseract)│ │(LibreTrans.)│ │
+│  │ (Pillow)   │ │(Tesseract)│ │(LibreTrans.)│ │
 │  └────────────┘ └──────────┘ └────────────┘ │
 │                      │                       │
 │              ┌───────▼───────┐               │
@@ -123,7 +123,8 @@ curl -X POST "http://localhost:8000/api/process?target_lang=en&max_frames=8" \
 - **Backend**: FastAPI, Uvicorn
 - **OCR**: Tesseract (pytesseract)
 - **Translation**: LibreTranslate API
-- **Image Processing**: OpenCV, Pillow, NumPy
+- **Image Processing**: Pillow (PIL)
+- **Video Processing**: imageio + PyAV
 - **Frontend**: HTML5, CSS3, Vanilla JavaScript
 - **Deployment**: Docker, Render
 
@@ -158,5 +159,5 @@ MIT License — see [LICENSE](LICENSE) for details.
 ---
 
 <p align="center">
-  Built with ❤️ using FastAPI · Tesseract OCR · LibreTranslate · OpenCV
+  Built with ❤️ using FastAPI · Tesseract OCR · LibreTranslate · Pillow
 </p>

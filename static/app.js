@@ -40,6 +40,8 @@
     let currentResults = null;
     let currentView = 'annotated';
 
+    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
+
     // --- Language Display Map ---
     const LANG_NAMES = {
         eng: 'English',
@@ -63,6 +65,12 @@
     function handleFileSelect(file) {
         if (!file) return;
 
+        // Client-side file size check
+        if (file.size > MAX_FILE_SIZE) {
+            alert(`File too large (${formatFileSize(file.size)}). Maximum size is 50 MB.`);
+            return;
+        }
+
         selectedFile = file;
         fileName.textContent = file.name;
         fileSize.textContent = formatFileSize(file.size);
@@ -72,12 +80,14 @@
         if (file.type.startsWith('image/')) {
             const img = document.createElement('img');
             img.src = URL.createObjectURL(file);
+            img.onload = () => URL.revokeObjectURL(img.src);
             filePreview.appendChild(img);
         } else if (file.type.startsWith('video/')) {
             const video = document.createElement('video');
             video.src = URL.createObjectURL(file);
             video.muted = true;
             video.autoplay = false;
+            video.onloadeddata = () => URL.revokeObjectURL(video.src);
             filePreview.appendChild(video);
         } else {
             filePreview.textContent = '📁';
@@ -250,7 +260,7 @@
                 const tr = document.createElement('tr');
                 const confClass =
                     det.confidence >= 70 ? 'confidence-high' :
-                    det.confidence >= 40 ? 'confidence-mid' : 'confidence-low';
+                        det.confidence >= 40 ? 'confidence-mid' : 'confidence-low';
 
                 tr.innerHTML = `
                     <td>#${frame.frame_number}</td>

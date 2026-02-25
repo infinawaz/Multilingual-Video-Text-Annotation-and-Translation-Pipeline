@@ -5,7 +5,6 @@ Applies contrast enhancement and basic sharpening
 to improve OCR accuracy on low-resolution frames.
 """
 
-import numpy as np
 from PIL import Image, ImageFilter, ImageEnhance
 
 
@@ -33,12 +32,12 @@ def to_grayscale(image: Image.Image) -> Image.Image:
 def preprocess_frame(image: Image.Image, for_ocr: bool = True) -> Image.Image:
     """
     Full preprocessing pipeline for a single frame.
-    
+
     Args:
         image: Input PIL Image.
         for_ocr: If True, returns a grayscale image optimized for OCR.
                   If False, returns an enhanced color image.
-    
+
     Returns:
         Preprocessed PIL Image.
     """

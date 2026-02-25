@@ -2,10 +2,10 @@
 OCR module for text detection and recognition.
 Uses Tesseract OCR with multi-language support
 (English, Hindi, Bengali, Tamil).
+Uses Pillow instead of OpenCV for lighter memory footprint.
 """
 
-import cv2
-import numpy as np
+from PIL import Image
 import pytesseract
 from typing import List, Dict, Any
 
@@ -24,12 +24,12 @@ LANGUAGE_MAP = {
 ALL_LANGS = "+".join(LANGUAGE_MAP.values())
 
 
-def detect_text_regions(image: np.ndarray, languages: str = ALL_LANGS) -> List[Dict[str, Any]]:
+def detect_text_regions(image: Image.Image, languages: str = ALL_LANGS) -> List[Dict[str, Any]]:
     """
     Detect and recognize text regions in a frame using Tesseract.
     
     Args:
-        image: Input BGR image (numpy array).
+        image: Input PIL Image.
         languages: Tesseract language string (e.g., 'eng+hin+ben+tam').
     
     Returns:
@@ -37,7 +37,6 @@ def detect_text_regions(image: np.ndarray, languages: str = ALL_LANGS) -> List[D
           - 'text': recognized text string
           - 'bbox': [x, y, width, height]
           - 'confidence': OCR confidence (0-100)
-          - 'language': detected language code
     """
     # Preprocess for better OCR
     preprocessed = preprocess_frame(image, for_ocr=True)
@@ -140,13 +139,13 @@ def group_text_by_lines(detections: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return grouped
 
 
-def extract_text_from_frame(image: np.ndarray) -> List[Dict[str, Any]]:
+def extract_text_from_frame(image: Image.Image) -> List[Dict[str, Any]]:
     """
     Full OCR pipeline for a single frame.
     Detects text, groups into lines, detects language.
     
     Args:
-        image: Input BGR image.
+        image: Input PIL Image.
     
     Returns:
         List of text region dicts with text, bbox, confidence, language.

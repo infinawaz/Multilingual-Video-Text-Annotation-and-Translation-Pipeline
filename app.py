@@ -3,17 +3,18 @@ Multilingual Video Text Annotation and Translation Pipeline
 ============================================================
 FastAPI web application for extracting, annotating, and translating
 text from video frames using Tesseract OCR and LibreTranslate.
+Optimized for lightweight deployment on Render free tier.
 """
 
 import os
+import io
 import uuid
 import base64
 import logging
 import tempfile
 import shutil
 
-import cv2
-import numpy as np
+from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -57,47 +58,51 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
-def frame_to_base64(frame: np.ndarray) -> str:
-    """Encode a BGR frame as a base64 JPEG string."""
-    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    return base64.b64encode(buffer).decode("utf-8")
+def image_to_base64(image: Image.Image) -> str:
+    """Encode a PIL Image as a base64 JPEG string."""
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=85)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
-def extract_frames(video_path: str, max_frames: int = 10, interval: int = 0) -> list:
+def extract_frames_from_video(video_path: str, max_frames: int = 8) -> list:
     """
-    Extract frames from a video file.
-
+    Extract frames from a video file using imageio (lightweight alternative to OpenCV).
+    
     Args:
         video_path: Path to the video file.
         max_frames: Maximum number of frames to extract.
-        interval: Frame interval (0 = auto-calculate from video length).
-
+    
     Returns:
-        List of (frame_number, BGR image) tuples.
+        List of (frame_number, PIL Image) tuples.
     """
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise ValueError(f"Cannot open video: {video_path}")
-
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if total_frames <= 0:
-        total_frames = 300  # fallback
-
-    if interval <= 0:
-        interval = max(1, total_frames // max_frames)
-
+    import imageio.v3 as iio
+    
+    try:
+        # Read all frames metadata to get count
+        frames_data = iio.imread(video_path, plugin="pyav")
+        total_frames = len(frames_data)
+    except Exception:
+        # Fallback: read frame by frame
+        frames_data = list(iio.imiter(video_path, plugin="pyav"))
+        total_frames = len(frames_data)
+    
+    if total_frames == 0:
+        return []
+    
+    interval = max(1, total_frames // max_frames)
     frames = []
-    frame_num = 0
-
-    while len(frames) < max_frames:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
-        ret, frame = cap.read()
-        if not ret:
+    
+    for i in range(0, total_frames, interval):
+        if len(frames) >= max_frames:
             break
-        frames.append((frame_num, frame))
-        frame_num += interval
-
-    cap.release()
+        frame_array = frames_data[i] if i < len(frames_data) else None
+        if frame_array is not None:
+            pil_image = Image.fromarray(frame_array)
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
+            frames.append((i, pil_image))
+    
     return frames
 
 
@@ -134,8 +139,6 @@ async def process_video(
     2. Run OCR on each frame
     3. Translate detected text
     4. Generate annotated frames
-    
-    Returns JSON with per-frame results and annotated frame images (base64).
     """
     # Validate file type
     allowed_video = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
@@ -161,9 +164,7 @@ async def process_video(
 
         if is_image:
             # Process single image
-            image = cv2.imread(file_path)
-            if image is None:
-                raise HTTPException(status_code=400, detail="Cannot read image file")
+            image = Image.open(file_path).convert("RGB")
 
             detections = extract_text_from_frame(image)
             detections = translate_detections(detections, target_lang=target_lang)
@@ -172,12 +173,12 @@ async def process_video(
             results.append({
                 "frame_number": 0,
                 "detections": detections,
-                "annotated_frame": frame_to_base64(annotated),
-                "original_frame": frame_to_base64(image),
+                "annotated_frame": image_to_base64(annotated),
+                "original_frame": image_to_base64(image),
             })
         else:
             # Process video frames
-            frames = extract_frames(file_path, max_frames=max_frames)
+            frames = extract_frames_from_video(file_path, max_frames=max_frames)
 
             if not frames:
                 raise HTTPException(status_code=400, detail="No frames extracted from video")
@@ -190,8 +191,8 @@ async def process_video(
                 results.append({
                     "frame_number": frame_num,
                     "detections": detections,
-                    "annotated_frame": frame_to_base64(annotated),
-                    "original_frame": frame_to_base64(frame),
+                    "annotated_frame": image_to_base64(annotated),
+                    "original_frame": image_to_base64(frame),
                 })
 
         # Summary statistics

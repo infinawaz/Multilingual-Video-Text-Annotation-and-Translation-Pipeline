@@ -1,8 +1,7 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
-opencv-python-headless==4.8.1.78
-pytesseract==0.3.10
 Pillow==10.1.0
+pytesseract==0.3.10
 requests==2.31.0
-numpy==1.26.2
+imageio[pyav]==2.33.0

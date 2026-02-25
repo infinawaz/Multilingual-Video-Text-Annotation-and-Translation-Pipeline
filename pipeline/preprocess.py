@@ -1,58 +1,51 @@
 """
 Preprocessing module for video frames.
-Applies thresholding, denoising, and contrast enhancement
+Uses Pillow for lightweight image processing.
+Applies contrast enhancement and basic sharpening
 to improve OCR accuracy on low-resolution frames.
 """
 
-import cv2
 import numpy as np
+from PIL import Image, ImageFilter, ImageEnhance
 
 
-def adaptive_threshold(image: np.ndarray) -> np.ndarray:
-    """Apply adaptive thresholding for better text contrast."""
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-    return cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-    )
+def enhance_contrast(image: Image.Image, factor: float = 1.5) -> Image.Image:
+    """Enhance contrast using Pillow's ImageEnhance."""
+    enhancer = ImageEnhance.Contrast(image)
+    return enhancer.enhance(factor)
 
 
-def denoise(image: np.ndarray, strength: int = 10) -> np.ndarray:
-    """Remove noise using Non-Local Means Denoising."""
-    if len(image.shape) == 3:
-        return cv2.fastNlMeansDenoisingColored(image, None, strength, strength, 7, 21)
-    return cv2.fastNlMeansDenoising(image, None, strength, 7, 21)
+def sharpen(image: Image.Image) -> Image.Image:
+    """Sharpen image to improve text clarity."""
+    return image.filter(ImageFilter.SHARPEN)
 
 
-def enhance_contrast(image: np.ndarray) -> np.ndarray:
-    """Enhance contrast using CLAHE (Contrast Limited Adaptive Histogram Equalization)."""
-    if len(image.shape) == 3:
-        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-        l_channel, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        l_channel = clahe.apply(l_channel)
-        enhanced = cv2.merge([l_channel, a, b])
-        return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
-    else:
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        return clahe.apply(image)
+def denoise(image: Image.Image) -> Image.Image:
+    """Simple denoising using median filter."""
+    return image.filter(ImageFilter.MedianFilter(size=3))
 
 
-def preprocess_frame(image: np.ndarray, for_ocr: bool = True) -> np.ndarray:
+def to_grayscale(image: Image.Image) -> Image.Image:
+    """Convert image to grayscale."""
+    return image.convert("L")
+
+
+def preprocess_frame(image: Image.Image, for_ocr: bool = True) -> Image.Image:
     """
     Full preprocessing pipeline for a single frame.
     
     Args:
-        image: Input BGR image (numpy array).
-        for_ocr: If True, returns a binary image optimized for OCR.
+        image: Input PIL Image.
+        for_ocr: If True, returns a grayscale image optimized for OCR.
                   If False, returns an enhanced color image.
     
     Returns:
-        Preprocessed image as numpy array.
+        Preprocessed PIL Image.
     """
-    denoised = denoise(image)
-    enhanced = enhance_contrast(denoised)
+    enhanced = enhance_contrast(image)
+    sharpened = sharpen(enhanced)
 
     if for_ocr:
-        return adaptive_threshold(enhanced)
+        return to_grayscale(sharpened)
 
-    return enhanced
+    return sharpened
